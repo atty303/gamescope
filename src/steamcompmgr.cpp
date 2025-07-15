@@ -1623,7 +1623,7 @@ bool MouseCursor::getTexture()
 				{
 					pixels[i * image->width + j] = image->pixels[i * image->width + j];
 				}
-			} 
+			}
 			std::vector<uint32_t> resizeBuffer( nDesiredWidth * nDesiredHeight );
 			stbir_resize_uint8_srgb( (unsigned char *)pixels.data(),       image->width,  image->height,  0,
 									 (unsigned char *)resizeBuffer.data(), nDesiredWidth, nDesiredHeight, 0,
@@ -1867,6 +1867,7 @@ namespace PaintWindowFlag
 	static const uint32_t DrawBorders = 1u << 3;
 	static const uint32_t NoScale = 1u << 4;
 	static const uint32_t NoFilter = 1u << 5;
+	static const uint32_t ForceOriginalTexture = 1u << 6;
 }
 using PaintWindowFlags = uint32_t;
 
@@ -1920,7 +1921,8 @@ paint_window_commit( const gamescope::Rc<commit_t> &lastCommit, steamcompmgr_win
 
 	layer->filter = ( flags & PaintWindowFlag::NoFilter ) ? GamescopeUpscaleFilter::LINEAR : g_upscaleFilter;
 
-	layer->tex = lastCommit->GetTexture( layer->filter, g_upscaleScaler );
+	bool bForceOriginal = ( flags & PaintWindowFlag::ForceOriginalTexture ) ? true : false;
+	layer->tex = bForceOriginal ? lastCommit->vulkanTex : lastCommit->GetTexture( layer->filter, g_upscaleScaler );
 
 	if (notificationMode)
 	{
@@ -1959,6 +1961,7 @@ paint_window_commit( const gamescope::Rc<commit_t> &lastCommit, steamcompmgr_win
 		}
 	}
 
+
 	bool offset = ( ( w->GetGeometry().nX || w->GetGeometry().nY ) && w != scaleW );
 
 	if (sourceWidth != currentOutputWidth || sourceHeight != currentOutputHeight || offset || globalScaleRatio != 1.0f)
@@ -1983,34 +1986,45 @@ paint_window_commit( const gamescope::Rc<commit_t> &lastCommit, steamcompmgr_win
 
 	layer->opacity = ( (w->isOverlay || w->isExternalOverlay) ? w->opacity / (float)OPAQUE : 1.0f ) * flOpacityScale;
 
-	layer->scale.x = 1.0 / currentScaleRatio_x;
-	layer->scale.y = 1.0 / currentScaleRatio_y;
-
-	if ( w != scaleW )
+	// For original resolution mode with PipeWire, use 1:1 mapping
+	if ( (flags & PaintWindowFlag::ForceOriginalTexture) )
 	{
-		layer->offset.x = -drawXOffset;
-		layer->offset.y = -drawYOffset;
-	}
-	else if (notificationMode)
-	{
-		int xOffset = 0, yOffset = 0;
-
-		int width = w->GetGeometry().nWidth * currentScaleRatio_x;
-		int height = w->GetGeometry().nHeight * currentScaleRatio_y;
-
-		if (globalScaleRatio != 1.0f)
-		{
-			xOffset = (currentOutputWidth - currentOutputWidth * globalScaleRatio) / 2.0;
-			yOffset = (currentOutputHeight - currentOutputHeight * globalScaleRatio) / 2.0;
-		}
-
-		layer->offset.x = (currentOutputWidth - xOffset - width) * -1.0f;
-		layer->offset.y = (currentOutputHeight - yOffset - height) * -1.0f;
+		layer->scale.x = 1.0f;
+		layer->scale.y = 1.0f;
+		layer->offset.x = 0.0f;
+		layer->offset.y = 0.0f;
 	}
 	else
 	{
-		layer->offset.x = -drawXOffset;
-		layer->offset.y = -drawYOffset;
+		layer->scale.x = 1.0 / currentScaleRatio_x;
+		layer->scale.y = 1.0 / currentScaleRatio_y;
+
+		if ( w != scaleW )
+		{
+			layer->offset.x = -drawXOffset;
+			layer->offset.y = -drawYOffset;
+		}
+		else if (notificationMode)
+		{
+			int xOffset = 0, yOffset = 0;
+
+			int width = w->GetGeometry().nWidth * currentScaleRatio_x;
+			int height = w->GetGeometry().nHeight * currentScaleRatio_y;
+
+			if (globalScaleRatio != 1.0f)
+			{
+				xOffset = (currentOutputWidth - currentOutputWidth * globalScaleRatio) / 2.0;
+				yOffset = (currentOutputHeight - currentOutputHeight * globalScaleRatio) / 2.0;
+			}
+
+			layer->offset.x = (currentOutputWidth - xOffset - width) * -1.0f;
+			layer->offset.y = (currentOutputHeight - yOffset - height) * -1.0f;
+		}
+		else
+		{
+			layer->offset.x = -drawXOffset;
+			layer->offset.y = -drawYOffset;
+		}
 	}
 
 	layer->blackBorder = flags & PaintWindowFlag::DrawBorders;
@@ -2200,13 +2214,24 @@ static void paint_pipewire()
 	s_ulLastOverrideCommitId = ulOverrideCommitId;
 
 	// Paint the windows we have onto the Pipewire stream.
-	paint_window( pFocus->focusWindow, pFocus->focusWindow, &frameInfo, global_focus.cursor, 0, 1.0f, pFocus->overrideWindow );
+	PaintWindowFlags pipewireFlags = g_bPipewireOriginalResolution ? PaintWindowFlag::ForceOriginalTexture : 0;
+	paint_window( pFocus->focusWindow, pFocus->focusWindow, &frameInfo, global_focus.cursor, pipewireFlags, 1.0f, pFocus->overrideWindow );
 
 	if ( pFocus->overrideWindow && !pFocus->focusWindow->isSteamStreamingClient )
-		paint_window( pFocus->overrideWindow, pFocus->focusWindow, &frameInfo, global_focus.cursor, PaintWindowFlag::NoFilter, 1.0f, pFocus->overrideWindow );
+		paint_window( pFocus->overrideWindow, pFocus->focusWindow, &frameInfo, global_focus.cursor, PaintWindowFlag::NoFilter | pipewireFlags, 1.0f, pFocus->overrideWindow );
+
+	// Use original window dimensions if requested, otherwise use output dimensions
+	uint32_t captureWidth = g_nOutputWidth;
+	uint32_t captureHeight = g_nOutputHeight;
+	if ( g_bPipewireOriginalResolution && pFocus->focusWindow )
+	{
+		auto geom = pFocus->focusWindow->GetGeometry();
+		captureWidth = geom.nWidth;
+		captureHeight = geom.nHeight;
+	}
 
 	gamescope::Rc<CVulkanTexture> pRGBTexture = s_pPipewireBuffer->texture->isYcbcr()
-		? vulkan_acquire_screenshot_texture( g_nOutputWidth, g_nOutputHeight, false, DRM_FORMAT_XRGB2101010 )
+		? vulkan_acquire_screenshot_texture( captureWidth, captureHeight, false, DRM_FORMAT_XRGB2101010 )
 		: gamescope::Rc<CVulkanTexture>{ s_pPipewireBuffer->texture };
 
 	gamescope::Rc<CVulkanTexture> pYUVTexture = s_pPipewireBuffer->texture->isYcbcr() ? s_pPipewireBuffer->texture : nullptr;
@@ -2318,7 +2343,7 @@ paint_all(bool async)
 					}
 				}
 			}
-			
+
 			int nOldLayerCount = frameInfo.layerCount;
 
 			uint32_t flags = 0;
@@ -2326,7 +2351,7 @@ paint_all(bool async)
 				flags |= PaintWindowFlag::BasePlane;
 			paint_window(w, w, &frameInfo, global_focus.cursor, flags);
 			update_touch_scaling( &frameInfo );
-			
+
 			// paint UI unless it's fully hidden, which it communicates to us through opacity=0
 			// we paint it to extract scaling coefficients above, then remove the layer if one was added
 			if ( w->opacity == TRANSLUCENT && bHasVideoUnderlay && nOldLayerCount < frameInfo.layerCount )
@@ -2339,7 +2364,7 @@ paint_all(bool async)
 				float opacityScale = g_bPendingFade
 					? 0.0f
 					: ((currentTime - fadeOutStartTime) / (float)g_FadeOutDuration);
-		
+
 				paint_cached_base_layer(g_HeldCommits[HELD_COMMIT_FADE], g_CachedPlanes[HELD_COMMIT_FADE], &frameInfo, 1.0f - opacityScale, false);
 				paint_window(w, w, &frameInfo, global_focus.cursor, PaintWindowFlag::BasePlane | PaintWindowFlag::FadeTarget | PaintWindowFlag::DrawBorders, opacityScale, override);
 			}
@@ -2419,7 +2444,7 @@ paint_all(bool async)
 		if ( tex != nullptr )
 		{
 			// HACK! HACK HACK HACK
-			// To avoid stutter when toggling the overlay on 
+			// To avoid stutter when toggling the overlay on
 			int curLayer = frameInfo.layerCount++;
 
 			FrameInfo_t::Layer_t *layer = &frameInfo.layers[ curLayer ];
@@ -3045,7 +3070,7 @@ win_maybe_a_dropdown( steamcompmgr_win_t *w )
 	//
 	// TODO: Come back to me for original Age of Empires HD launcher.
 	// Does that use it? It wants blending!
-	// 
+	//
 	// Only do this if we have CONTROLPARENT right now. Some other apps, such as the
 	// Street Fighter V (310950) Splash Screen also use LAYERED and TOOLWINDOW, and we don't
 	// want that to be overlayed.
@@ -3060,12 +3085,12 @@ win_maybe_a_dropdown( steamcompmgr_win_t *w )
 
 	// Josh:
 	// The logic here is as follows. The window will be treated as a dropdown if:
-	// 
+	//
 	// If this window has a fixed position on the screen + static gravity:
 	//  - If the window has either skipPage or skipTaskbar
 	//    - If the window isn't a dialog, always treat it as a dropdown, as it's
 	//      probably meant to be some form of popup.
-	//    - If the window is a dialog 
+	//    - If the window is a dialog
 	// 		- If the window has transient for, disregard it, as it is trying to redirecting us elsewhere
 	//        ie. a settings menu dialog popup or something.
 	//      - If the window has both skip taskbar and pager, treat it as a dialog.
@@ -3157,7 +3182,7 @@ static bool is_good_override_candidate( steamcompmgr_win_t *override, steamcompm
 		return false;
 
 	return override != focus && override->GetGeometry().nX >= 0 && override->GetGeometry().nY >= 0;
-} 
+}
 
 static bool
 pick_primary_focus_and_override(focus_t *out, Window focusControlWindow, const std::vector<steamcompmgr_win_t*>& vecPossibleFocusWindows, bool globalFocus, const std::vector<uint32_t>& ctxFocusControlAppIDs)
@@ -3298,7 +3323,7 @@ found:;
 
 	if ( focus )
 	{
-		if ( window_has_commits( focus ) ) 
+		if ( window_has_commits( focus ) )
 			out->focusWindow = focus;
 		else
 			focus->outdatedInteractiveFocus = true;
@@ -3341,9 +3366,9 @@ found:;
 					override_focus = fake_override;
 					goto found2;
 				}
-			}	
+			}
 		}
-		
+
 		found2:;
 		resolveTransientOverrides( true );
 	}
@@ -4605,7 +4630,7 @@ finish_destroy_win(xwayland_ctx_t *ctx, Window id, bool gone)
 		{
 			if (gone)
 				finish_unmap_win (ctx, w);
-			
+
 			{
 				std::unique_lock lock( ctx->list_mutex );
 				*prev = w->xwayland().next;
@@ -4662,7 +4687,7 @@ destroy_win(xwayland_ctx_t *ctx, Window id, bool gone, bool fade)
 		global_focus.overrideWindow = nullptr;
 	if (x11_win(global_focus.fadeWindow) == id && gone)
 		global_focus.fadeWindow = nullptr;
-		
+
 	MakeFocusDirty();
 
 	finish_destroy_win(ctx, id, gone);
@@ -5286,7 +5311,7 @@ handle_property_notify(xwayland_ctx_t *ctx, XPropertyEvent *ev)
 		{
 			get_win_type(ctx, w);
 			MakeFocusDirty();
-		}		
+		}
 	}
 	if (ev->atom == ctx->atoms.sizeHintsAtom)
 	{
@@ -6195,7 +6220,7 @@ void handle_done_commits_xdg( bool vblank, uint64_t vblank_idx )
 			commits_before_their_time.push_back( entry );
 			continue;
 		}
-		
+
 		if (!entry.earliestPresentTime)
 		{
 			entry.earliestPresentTime = next_refresh_time;
@@ -6488,7 +6513,7 @@ void update_wayland_res(CommitDoneList_t *doneCommits, steamcompmgr_win_t *w, Re
 				const uint64_t ulNextReleasePoint = ++pTempImage->ulLastPoint;
 
 				std::unique_ptr<CVulkanCmdBuffer> pCommandBuffer = g_device.commandBuffer();
-				
+
 				pCommandBuffer->AddDependency( reslistentry.pAcquirePoint->GetTimeline()->ToVkSemaphore(), reslistentry.pAcquirePoint->GetPoint() );
 				pCommandBuffer->AddSignal( pTempImage->pReleaseTimeline->ToVkSemaphore(), ulNextReleasePoint );
 
@@ -6516,7 +6541,7 @@ void update_wayland_res(CommitDoneList_t *doneCommits, steamcompmgr_win_t *w, Re
 				bPreemptiveUpscale = false;
 			}
 		}
-		
+
 		if ( !bPreemptiveUpscale )
 		{
 			if ( bValidPreemptiveScale )
@@ -7217,7 +7242,7 @@ void update_mode_atoms(xwayland_ctx_t *root_ctx, bool* needs_flush = nullptr)
 	}
 	XChangeProperty(root_ctx->dpy, root_ctx->root, root_ctx->atoms.gamescopeDisplayModeListExternal, XA_STRING, 8, PropModeReplace,
 		(unsigned char *)modes, strlen(modes) + 1 );
-	
+
 	uint32_t one = 1;
 	XChangeProperty(root_ctx->dpy, root_ctx->root, root_ctx->atoms.gamescopeDisplayIsExternal, XA_CARDINAL, 32, PropModeReplace,
 		(unsigned char *)&one, 1 );
@@ -8072,7 +8097,7 @@ void steamcompmgr_send_frame_done_to_focus_window()
 	{
 		wlserver_lock();
 		wlserver_send_frame_done( global_focus.focusWindow->xwayland().surface.main_surface , &now );
-		wlserver_unlock();		
+		wlserver_unlock();
 	}
 }
 
@@ -8130,4 +8155,15 @@ MouseCursor *steamcompmgr_get_server_cursor(uint32_t idx)
 	if ( server && server->ctx )
 		return  server->ctx->cursor.get();
 	return nullptr;
+}
+
+bool steamcompmgr_get_focused_window_dimensions(uint32_t *width, uint32_t *height)
+{
+	if ( !global_focus.focusWindow || !width || !height )
+		return false;
+
+	auto geom = global_focus.focusWindow->GetGeometry();
+	*width = geom.nWidth;
+	*height = geom.nHeight;
+	return true;
 }

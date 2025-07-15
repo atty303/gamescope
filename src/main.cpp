@@ -146,6 +146,8 @@ const struct option *gamescope_options = (struct option[]){
 
 	// Steam Deck options
 	{ "mura-map", required_argument, nullptr, 0 },
+	// PipeWire options
+	{ "pipewire-original-resolution", no_argument, nullptr, 0 },
 
 	{} // keep last
 };
@@ -203,6 +205,7 @@ const char usage[] =
 	"                                 Default: 1000 nits, Max: 10000 nits\n"
 	"  --framerate-limit              Set a simple framerate limit. Used as a divisor of the refresh rate, rounds down eg 60 / 59 -> 60fps, 60 / 25 -> 30fps. Default: 0, disabled.\n"
 	"  --mangoapp                     Launch with the mangoapp (mangohud) performance overlay enabled. You should use this instead of using mangohud on the game or gamescope.\n"
+	"  --pipewire-original-resolution Output the original window resolution to PipeWire instead of the scaled resolution.\n"
 	"\n"
 	"Nested mode options:\n"
 	"  -o, --nested-unfocused-refresh game refresh rate when unfocused\n"
@@ -645,6 +648,7 @@ static void UpdateCompatEnvVars()
 int g_nPreferredOutputWidth = 0;
 int g_nPreferredOutputHeight = 0;
 bool g_bExposeWayland = false;
+bool g_bPipewireOriginalResolution = false;
 const char *g_sOutputName = nullptr;
 bool g_bDebugLayers = false;
 bool g_bForceDisableColorMgmt = false;
@@ -773,6 +777,8 @@ int main(int argc, char **argv)
 					g_nCursorScaleHeight = atoi(optarg);
 				} else if (strcmp(opt_name, "mangoapp") == 0) {
 					g_bLaunchMangoapp = true;
+				} else if (strcmp(opt_name, "pipewire-original-resolution") == 0) {
+					g_bPipewireOriginalResolution = true;
 				}
 				break;
 			case '?':

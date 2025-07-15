@@ -15,6 +15,9 @@ void sleep_for_nanos(uint64_t nanos);
 void sleep_until_nanos(uint64_t nanos);
 timespec nanos_to_timespec( uint64_t ulNanos );
 
+// Get the dimensions of the currently focused window for PipeWire capture
+bool steamcompmgr_get_focused_window_dimensions(uint32_t *width, uint32_t *height);
+
 void steamcompmgr_main(int argc, char **argv);
 
 #include "rendervulkan.hpp"
