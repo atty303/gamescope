@@ -1867,7 +1867,7 @@ namespace PaintWindowFlag
 	static const uint32_t DrawBorders = 1u << 3;
 	static const uint32_t NoScale = 1u << 4;
 	static const uint32_t NoFilter = 1u << 5;
-	static const uint32_t ForceSourceTexture = 1u << 6;
+	static const uint32_t PipeWire = 1u << 6;
 }
 using PaintWindowFlags = uint32_t;
 
@@ -1921,8 +1921,9 @@ paint_window_commit( const gamescope::Rc<commit_t> &lastCommit, steamcompmgr_win
 
 	layer->filter = ( flags & PaintWindowFlag::NoFilter ) ? GamescopeUpscaleFilter::LINEAR : g_upscaleFilter;
 
-	bool bForceSource = ( flags & PaintWindowFlag::ForceSourceTexture ) ? true : false;
-	layer->tex = bForceSource ? lastCommit->vulkanTex : lastCommit->GetTexture( layer->filter, g_upscaleScaler );
+	// Use source texture for PipeWire when source mode is enabled
+	bool bUseSourceTexture = (g_ePipewireSourceMode == PipeWireSourceMode::Source);
+	layer->tex = bUseSourceTexture ? lastCommit->vulkanTex : lastCommit->GetTexture( layer->filter, g_upscaleScaler );
 
 	if (notificationMode)
 	{
@@ -1931,8 +1932,17 @@ paint_window_commit( const gamescope::Rc<commit_t> &lastCommit, steamcompmgr_win
 	}
 	else if ( flags & PaintWindowFlag::NoScale )
 	{
-		sourceWidth = currentOutputWidth;
-		sourceHeight = currentOutputHeight;
+		if ( flags & PaintWindowFlag::PipeWire && g_ePipewireSourceMode == PipeWireSourceMode::Source )
+		{
+			// For PipeWire source mode, use the actual texture dimensions
+			sourceWidth = layer->tex->width();
+			sourceHeight = layer->tex->height();
+		}
+		else
+		{
+			sourceWidth = currentOutputWidth;
+			sourceHeight = currentOutputHeight;
+		}
 	}
 	else
 	{
@@ -1956,20 +1966,26 @@ paint_window_commit( const gamescope::Rc<commit_t> &lastCommit, steamcompmgr_win
 		if ( fit )
 		{
 			// If we have an override window, try to fit it in as long as it won't make our scale go below 1.0.
-			sourceWidth = std::max<uint32_t>( sourceWidth, clamp<int>( fit->GetGeometry().nX + fit->GetGeometry().nWidth, 0, currentOutputWidth ) );
-			sourceHeight = std::max<uint32_t>( sourceHeight, clamp<int>( fit->GetGeometry().nY + fit->GetGeometry().nHeight, 0, currentOutputHeight ) );
+			uint32_t outputWidth = (flags & PaintWindowFlag::PipeWire && g_nPipewireWidth > 0) ? g_nPipewireWidth : currentOutputWidth;
+			uint32_t outputHeight = (flags & PaintWindowFlag::PipeWire && g_nPipewireHeight > 0) ? g_nPipewireHeight : currentOutputHeight;
+			sourceWidth = std::max<uint32_t>( sourceWidth, clamp<int>( fit->GetGeometry().nX + fit->GetGeometry().nWidth, 0, outputWidth ) );
+			sourceHeight = std::max<uint32_t>( sourceHeight, clamp<int>( fit->GetGeometry().nY + fit->GetGeometry().nHeight, 0, outputHeight ) );
 		}
 	}
 
 
 	bool offset = ( ( w->GetGeometry().nX || w->GetGeometry().nY ) && w != scaleW );
 
-	if (sourceWidth != currentOutputWidth || sourceHeight != currentOutputHeight || offset || globalScaleRatio != 1.0f)
+	// Use PipeWire dimensions for scaling calculations if PipeWire flag is set
+	uint32_t targetOutputWidth = (flags & PaintWindowFlag::PipeWire && g_nPipewireWidth > 0) ? g_nPipewireWidth : currentOutputWidth;
+	uint32_t targetOutputHeight = (flags & PaintWindowFlag::PipeWire && g_nPipewireHeight > 0) ? g_nPipewireHeight : currentOutputHeight;
+
+	if (sourceWidth != targetOutputWidth || sourceHeight != targetOutputHeight || offset || globalScaleRatio != 1.0f)
 	{
 		calc_scale_factor(currentScaleRatio_x, currentScaleRatio_y, sourceWidth, sourceHeight);
 
-		drawXOffset = ((int)currentOutputWidth - (int)sourceWidth * currentScaleRatio_x) / 2.0f;
-		drawYOffset = ((int)currentOutputHeight - (int)sourceHeight * currentScaleRatio_y) / 2.0f;
+		drawXOffset = ((int)targetOutputWidth - (int)sourceWidth * currentScaleRatio_x) / 2.0f;
+		drawYOffset = ((int)targetOutputHeight - (int)sourceHeight * currentScaleRatio_y) / 2.0f;
 
 		if ( w != scaleW )
 		{
@@ -1986,45 +2002,37 @@ paint_window_commit( const gamescope::Rc<commit_t> &lastCommit, steamcompmgr_win
 
 	layer->opacity = ( (w->isOverlay || w->isExternalOverlay) ? w->opacity / (float)OPAQUE : 1.0f ) * flOpacityScale;
 
-	// For source texture mode with PipeWire, use 1:1 mapping
-	if ( (flags & PaintWindowFlag::ForceSourceTexture) )
+	layer->scale.x = 1.0 / currentScaleRatio_x;
+	layer->scale.y = 1.0 / currentScaleRatio_y;
+
+	if ( w != scaleW )
 	{
-		layer->scale.x = 1.0f;
-		layer->scale.y = 1.0f;
-		layer->offset.x = 0.0f;
-		layer->offset.y = 0.0f;
+		layer->offset.x = -drawXOffset;
+		layer->offset.y = -drawYOffset;
+	}
+	else if (notificationMode)
+	{
+		int xOffset = 0, yOffset = 0;
+
+		int width = w->GetGeometry().nWidth * currentScaleRatio_x;
+		int height = w->GetGeometry().nHeight * currentScaleRatio_y;
+
+		uint32_t outputWidth = (flags & PaintWindowFlag::PipeWire && g_nPipewireWidth > 0) ? g_nPipewireWidth : currentOutputWidth;
+		uint32_t outputHeight = (flags & PaintWindowFlag::PipeWire && g_nPipewireHeight > 0) ? g_nPipewireHeight : currentOutputHeight;
+
+		if (globalScaleRatio != 1.0f)
+		{
+			xOffset = (outputWidth - outputWidth * globalScaleRatio) / 2.0;
+			yOffset = (outputHeight - outputHeight * globalScaleRatio) / 2.0;
+		}
+
+		layer->offset.x = (outputWidth - xOffset - width) * -1.0f;
+		layer->offset.y = (outputHeight - yOffset - height) * -1.0f;
 	}
 	else
 	{
-		layer->scale.x = 1.0 / currentScaleRatio_x;
-		layer->scale.y = 1.0 / currentScaleRatio_y;
-
-		if ( w != scaleW )
-		{
-			layer->offset.x = -drawXOffset;
-			layer->offset.y = -drawYOffset;
-		}
-		else if (notificationMode)
-		{
-			int xOffset = 0, yOffset = 0;
-
-			int width = w->GetGeometry().nWidth * currentScaleRatio_x;
-			int height = w->GetGeometry().nHeight * currentScaleRatio_y;
-
-			if (globalScaleRatio != 1.0f)
-			{
-				xOffset = (currentOutputWidth - currentOutputWidth * globalScaleRatio) / 2.0;
-				yOffset = (currentOutputHeight - currentOutputHeight * globalScaleRatio) / 2.0;
-			}
-
-			layer->offset.x = (currentOutputWidth - xOffset - width) * -1.0f;
-			layer->offset.y = (currentOutputHeight - yOffset - height) * -1.0f;
-		}
-		else
-		{
-			layer->offset.x = -drawXOffset;
-			layer->offset.y = -drawYOffset;
-		}
+		layer->offset.x = -drawXOffset;
+		layer->offset.y = -drawYOffset;
 	}
 
 	layer->blackBorder = flags & PaintWindowFlag::DrawBorders;
@@ -2214,11 +2222,10 @@ static void paint_pipewire()
 	s_ulLastOverrideCommitId = ulOverrideCommitId;
 
 	// Paint the windows we have onto the Pipewire stream.
-	PaintWindowFlags pipewireFlags = (g_ePipewireSourceMode == PipeWireSourceMode::Source) ? PaintWindowFlag::ForceSourceTexture : 0;
-	paint_window( pFocus->focusWindow, pFocus->focusWindow, &frameInfo, global_focus.cursor, pipewireFlags, 1.0f, pFocus->overrideWindow );
+	paint_window( pFocus->focusWindow, pFocus->focusWindow, &frameInfo, global_focus.cursor, PaintWindowFlag::PipeWire, 1.0f, pFocus->overrideWindow );
 
 	if ( pFocus->overrideWindow && !pFocus->focusWindow->isSteamStreamingClient )
-		paint_window( pFocus->overrideWindow, pFocus->focusWindow, &frameInfo, global_focus.cursor, PaintWindowFlag::NoFilter | pipewireFlags, 1.0f, pFocus->overrideWindow );
+		paint_window( pFocus->overrideWindow, pFocus->focusWindow, &frameInfo, global_focus.cursor, PaintWindowFlag::NoFilter | PaintWindowFlag::PipeWire, 1.0f, pFocus->overrideWindow );
 
 	// Use fixed dimensions if specified, otherwise use output dimensions
 	uint32_t captureWidth = (g_nPipewireWidth > 0) ? g_nPipewireWidth : g_nOutputWidth;
