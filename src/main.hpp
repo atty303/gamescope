@@ -73,5 +73,12 @@ extern int g_nXWaylandCount;
 extern uint32_t g_preferVendorID;
 extern uint32_t g_preferDeviceID;
 
-extern bool g_bPipewireOriginalResolution;
+enum class PipeWireSourceMode {
+	Output,
+	Source
+};
+
+extern PipeWireSourceMode g_ePipewireSourceMode;
+extern int g_nPipewireWidth;
+extern int g_nPipewireHeight;
 

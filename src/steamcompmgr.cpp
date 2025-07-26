@@ -1867,7 +1867,7 @@ namespace PaintWindowFlag
 	static const uint32_t DrawBorders = 1u << 3;
 	static const uint32_t NoScale = 1u << 4;
 	static const uint32_t NoFilter = 1u << 5;
-	static const uint32_t ForceOriginalTexture = 1u << 6;
+	static const uint32_t ForceSourceTexture = 1u << 6;
 }
 using PaintWindowFlags = uint32_t;
 
@@ -1921,8 +1921,8 @@ paint_window_commit( const gamescope::Rc<commit_t> &lastCommit, steamcompmgr_win
 
 	layer->filter = ( flags & PaintWindowFlag::NoFilter ) ? GamescopeUpscaleFilter::LINEAR : g_upscaleFilter;
 
-	bool bForceOriginal = ( flags & PaintWindowFlag::ForceOriginalTexture ) ? true : false;
-	layer->tex = bForceOriginal ? lastCommit->vulkanTex : lastCommit->GetTexture( layer->filter, g_upscaleScaler );
+	bool bForceSource = ( flags & PaintWindowFlag::ForceSourceTexture ) ? true : false;
+	layer->tex = bForceSource ? lastCommit->vulkanTex : lastCommit->GetTexture( layer->filter, g_upscaleScaler );
 
 	if (notificationMode)
 	{
@@ -1986,8 +1986,8 @@ paint_window_commit( const gamescope::Rc<commit_t> &lastCommit, steamcompmgr_win
 
 	layer->opacity = ( (w->isOverlay || w->isExternalOverlay) ? w->opacity / (float)OPAQUE : 1.0f ) * flOpacityScale;
 
-	// For original resolution mode with PipeWire, use 1:1 mapping
-	if ( (flags & PaintWindowFlag::ForceOriginalTexture) )
+	// For source texture mode with PipeWire, use 1:1 mapping
+	if ( (flags & PaintWindowFlag::ForceSourceTexture) )
 	{
 		layer->scale.x = 1.0f;
 		layer->scale.y = 1.0f;
@@ -2214,21 +2214,15 @@ static void paint_pipewire()
 	s_ulLastOverrideCommitId = ulOverrideCommitId;
 
 	// Paint the windows we have onto the Pipewire stream.
-	PaintWindowFlags pipewireFlags = g_bPipewireOriginalResolution ? PaintWindowFlag::ForceOriginalTexture : 0;
+	PaintWindowFlags pipewireFlags = (g_ePipewireSourceMode == PipeWireSourceMode::Source) ? PaintWindowFlag::ForceSourceTexture : 0;
 	paint_window( pFocus->focusWindow, pFocus->focusWindow, &frameInfo, global_focus.cursor, pipewireFlags, 1.0f, pFocus->overrideWindow );
 
 	if ( pFocus->overrideWindow && !pFocus->focusWindow->isSteamStreamingClient )
 		paint_window( pFocus->overrideWindow, pFocus->focusWindow, &frameInfo, global_focus.cursor, PaintWindowFlag::NoFilter | pipewireFlags, 1.0f, pFocus->overrideWindow );
 
-	// Use original window dimensions if requested, otherwise use output dimensions
-	uint32_t captureWidth = g_nOutputWidth;
-	uint32_t captureHeight = g_nOutputHeight;
-	if ( g_bPipewireOriginalResolution && pFocus->focusWindow )
-	{
-		auto geom = pFocus->focusWindow->GetGeometry();
-		captureWidth = geom.nWidth;
-		captureHeight = geom.nHeight;
-	}
+	// Use fixed dimensions if specified, otherwise use output dimensions
+	uint32_t captureWidth = (g_nPipewireWidth > 0) ? g_nPipewireWidth : g_nOutputWidth;
+	uint32_t captureHeight = (g_nPipewireHeight > 0) ? g_nPipewireHeight : g_nOutputHeight;
 
 	gamescope::Rc<CVulkanTexture> pRGBTexture = s_pPipewireBuffer->texture->isYcbcr()
 		? vulkan_acquire_screenshot_texture( captureWidth, captureHeight, false, DRM_FORMAT_XRGB2101010 )

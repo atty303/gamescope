@@ -13,7 +13,6 @@
 #include "main.hpp"
 #include "pipewire.hpp"
 #include "log.hpp"
-#include "steamcompmgr.hpp"
 
 #include <spa/debug/format.h>
 
@@ -72,15 +71,10 @@ void pipewire_destroy_buffer(struct pipewire_buffer *buffer)
 
 static void calculate_capture_size()
 {
-	// If original resolution mode is enabled, try to use focused window dimensions
-	if (g_bPipewireOriginalResolution) {
-		uint32_t windowWidth, windowHeight;
-		if (steamcompmgr_get_focused_window_dimensions(&windowWidth, &windowHeight)) {
-			s_nCaptureWidth = windowWidth;
-			s_nCaptureHeight = windowHeight;
-			return;
-		}
-		// Fall back to output dimensions if no focused window
+	if (g_nPipewireWidth > 0 && g_nPipewireHeight > 0) {
+		s_nCaptureWidth = g_nPipewireWidth;
+		s_nCaptureHeight = g_nPipewireHeight;
+		return;
 	}
 
 	s_nCaptureWidth = s_nOutputWidth;
@@ -290,9 +284,8 @@ static void dispatch_nudge(struct pipewire_state *state, int fd)
 		calculate_capture_size();
 	}
 
-	// For original resolution mode, recalculate capture size even if output dimensions haven't changed
-	// This handles cases where the window size changed without output size changing
-	if (g_bPipewireOriginalResolution) {
+	// For fixed dimensions mode, recalculate capture size to ensure they're applied
+	if (g_nPipewireWidth > 0 && g_nPipewireHeight > 0) {
 		calculate_capture_size();
 	}
 	if (s_nCaptureWidth != state->video_info.size.width || s_nCaptureHeight != state->video_info.size.height) {
