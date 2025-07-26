@@ -52,7 +52,7 @@ static void destroy_buffer(struct pipewire_buffer *buffer) {
 		break; // nothing to do
 	default:
 		assert(false); // unreachable
-	}
+	}	
 
 	// If out_buffer == buffer, then set it to nullptr.
 	// We don't care about the result.
