@@ -52,7 +52,7 @@ static void destroy_buffer(struct pipewire_buffer *buffer) {
 		break; // nothing to do
 	default:
 		assert(false); // unreachable
-	}	
+	}
 
 	// If out_buffer == buffer, then set it to nullptr.
 	// We don't care about the result.
@@ -284,7 +284,6 @@ static void dispatch_nudge(struct pipewire_state *state, int fd)
 		calculate_capture_size();
 	}
 
-	// For fixed dimensions mode, recalculate capture size to ensure they're applied
 	if (g_nPipewireWidth > 0 && g_nPipewireHeight > 0) {
 		calculate_capture_size();
 	}
